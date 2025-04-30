@@ -1,0 +1,7 @@
+OUTPUT FROM SHOW COMMANDS for: {{ inventory_hostname }}
+
+{% for cmd, output in command_list | zip(showoutput.stdout) %}
+############# {{ cmd }} ###########
+{{ output }}
+
+{% endfor %}

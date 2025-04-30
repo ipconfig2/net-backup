@@ -1,0 +1,8 @@
+- name: Test Junos connection via Netconf
+  hosts: Juniper
+  connection: netconf
+  gather_facts: no
+
+  tasks:
+    - name: Collect facts from Junos device
+      junipernetworks.junos.junos_facts:

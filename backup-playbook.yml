@@ -1,0 +1,206 @@
+---
+# ───────────────
+# Prerequisites:
+# ───────────────
+# python and ansible must be installed
+# ansible-galaxy collection install cisco.ios junipernetworks.junos ansible.posix ansible.netcommon
+# ansible-galaxy collection install community.general
+# Make sure SSH is enabled on Cisco and juniper devices
+# Make sure Netconf is enabled on juniper devices
+# ───────────────
+# ~/.ansible.cfg should have:
+# ───────────────
+# [defaults]
+# host_key_checking = False
+# vault_password_file = ~/ansible-netauto/.ansible_vault_pass.txt
+# inventory = ~/ansible-netauto/backup_yaml_files/inventory.yml
+# ───────────────
+# Ansible Vault Notes:
+# ───────────────
+# ansible-vault encrypt inventory.yml --vault-password-file ~/ansible-netauto/.ansible_vault_pass.txt
+# ansible-vault view inventory.yml --vault-password-file ~/ansible-netauto/.ansible_vault_pass.txt
+# ansible-vault edit inventory.yml --vault-password-file ~/ansible-netauto/.ansible_vault_pass.txt
+# run manual ansible-playbook playbook.yml --ask-vault-pass
+# ───────────────
+# Juniper Notes:
+# ───────────────
+# Ensure these are set on each Junos device:
+# set system services ssh root-login allow
+# set system services netconf ssh
+# For older juniper devices set system services netconf rfc-compliant
+# ───────────────
+
+- hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Get ansible date/time facts
+      setup:
+        filter: "ansible_date_time"
+        gather_subset: "!all"
+
+    - name: Store DTG as fact
+      set_fact:
+        DTG: "{{ ansible_date_time.date }}"
+
+    - name: Create backup directory
+      file:
+        path: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}"
+        state: directory
+  run_once: true
+
+# ===================== CISCO ROUTERS =====================
+
+- hosts: Cisco_Routers
+  gather_facts: no
+  tasks:
+    - name: Backup IOS config
+      cisco.ios.ios_command:
+        commands: show run
+      register: config
+
+    - name: Save IOS config
+      copy:
+        content: "{{ config.stdout[0] }}"
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-config.txt"
+
+- hosts: Cisco_Routers
+  gather_facts: no
+  vars:
+    command_list:
+      - show version
+      - show ip interface brief
+      - show interfaces
+      - show ip route
+      - show ip protocols
+      - show cdp neighbors detail
+      - show lldp neighbors detail
+      - show clock
+      - show users
+      - show boot
+      - show int stat
+      - show arp
+  tasks:
+    - name: Run the SHOW commands and save output
+      cisco.ios.ios_command:
+        commands: "{{ command_list }}"
+      register: showoutput
+
+    - name: Save output to file
+      template:
+        src: template.j2
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-showoutput.txt"
+
+# ===================== CISCO SWITCHES =====================
+
+- hosts: Cisco_Switches
+  gather_facts: no
+  tasks:
+    - name: Backup Catalyst Switch config
+      cisco.ios.ios_config:
+        backup: yes
+        backup_options:
+          filename: "{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-config.txt"
+          dir_path: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}"
+
+- hosts: Cisco_Switches
+  gather_facts: no
+  vars:
+    command_list:
+      - show version
+      - show vlan brief
+      - show interfaces status
+      - show interfaces description
+      - show interfaces
+      - show ip interface brief
+      - show cdp neighbors detail
+      - show lldp neighbors detail
+      - show spanning-tree
+      - show mac address-table
+      - show arp
+      - show clock
+      - show users
+      - show boot
+  tasks:
+    - name: Run the SHOW commands and save output
+      cisco.ios.ios_command:
+        commands: "{{ command_list }}"
+      register: showoutput
+
+    - name: Save output to file
+      template:
+        src: template.j2
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-showoutput.txt"
+
+# ===================== JUNIPER CONFIGURATION OUTPUT =====================
+- hosts: Juniper
+  gather_facts: no
+  connection: netconf
+
+  vars:
+    backup_dir: "{{ lookup('env','HOME') ~ '/network-programmability/backups/' ~ (hostvars['localhost']['DTG'] | trim) }}"
+
+  tasks:
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Run SHOW Config command for Juniper
+      junipernetworks.junos.junos_command:
+        commands:
+          - show configuration
+      register: juniper_config
+
+    - name: Debug juniper config
+      debug:
+        var: juniper_config
+
+    - name: Save Junos config and show outputs to disk
+      copy:
+        content: "{{ juniper_config.stdout | join('\n') | default('No output from device') }}"
+        dest: "{{ backup_dir ~ '/' ~ inventory_hostname ~ '-' ~ (hostvars['localhost']['DTG'] | trim) ~ '-config.txt' }}"
+
+# ===================== JUNIPER SHOW OUTPUT =====================
+
+- name: JUNIPER SHOW OUTPUT
+  hosts: Juniper
+  gather_facts: no
+  connection: netconf
+
+  collections:
+    - junipernetworks.junos
+
+  vars:
+    DTG: "{{ lookup('pipe','date +%Y-%m-%d') }}"
+    backup_dir: "{{ lookup('env','HOME') }}/network-programmability/backups/{{ DTG }}"
+    junos_rpcs:
+      - { rpc: get-software-information }
+      - { rpc: get-system-uptime-information }
+      - { rpc: get-interface-information }
+      - { rpc: get-route-summary-information }
+      - { rpc: get-commit-information }
+      - { rpc: get-commit-revision-information }
+      - { rpc: get-alarm-information }
+
+  tasks:
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+      delegate_to: localhost
+
+    - name: Run Junos RPC commands
+      junipernetworks.junos.junos_rpc:
+        rpc: "{{ item.rpc }}"
+        output: xml
+      loop: "{{ junos_rpcs }}"
+      register: rpc_output
+
+    - name: Save output using template
+      template:
+        src: junos_output.j2
+        dest: "{{ backup_dir ~ '/' ~ inventory_hostname ~ '-' ~ (hostvars['localhost']['DTG'] | trim) ~ '-showoutput.txt' }}"
+      vars:
+        showoutput: "{{ rpc_output }}"
+      delegate_to: localhost

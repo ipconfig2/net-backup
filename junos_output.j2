@@ -1,0 +1,17 @@
+OUTPUT FROM JUNOS RPC COMMANDS for: {{ inventory_hostname }}
+
+{% for result in showoutput.results %}
+===============================================================================
+RPC: {{ result.invocation.module_args.rpc }}
+-------------------------------------------------------------------------------
+
+{% if result.xml is defined and result.xml | length > 0 %}
+{{ result.xml
+   | replace('><', '>\n<')
+   | indent(4, true)
+}}
+{% else %}
+    NO OUTPUT or RPC FAILED.
+{% endif %}
+
+{% endfor %}
