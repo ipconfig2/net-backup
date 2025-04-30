@@ -49,11 +49,16 @@
       set_fact:
         DTG: "{{ ansible_date_time.date }}"
 
-    - name: Create backup directory
+    - name: Create archive and current backup directories
       file:
-        path: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}"
+        path: "{{ item }}"
         state: directory
+        mode: '0755'
+      loop:
+        - "{{ lookup('env', 'HOME') }}/network-programmability/backups/archive/{{ ansible_date_time.date }}"
+        - "{{ lookup('env', 'HOME') }}/network-programmability/backups/current"
   run_once: true
+
 
 # ===================== CISCO ROUTERS =====================
 
@@ -65,10 +70,15 @@
         commands: show run
       register: config
 
-    - name: Save IOS config
+    - name: Save IOS config to dated archive
       copy:
         content: "{{ config.stdout[0] }}"
-        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-config.txt"
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/archive/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-config.txt"
+
+    - name: Save IOS config to current/ for diffing
+      copy:
+        content: "{{ config.stdout[0] }}"
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/current/{{ inventory_hostname }}-config.txt"
 
 - hosts: Cisco_Routers
   gather_facts: no
@@ -92,22 +102,38 @@
         commands: "{{ command_list }}"
       register: showoutput
 
-    - name: Save output to file
+    - name: Save show output to dated archive
       template:
         src: template.j2
-        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-showoutput.txt"
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/archive/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-showoutput.txt"
+
+    - name: Save show output to current/ for diffing
+      template:
+        src: template.j2
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/current/{{ inventory_hostname }}-showoutput.txt"
+
 
 # ===================== CISCO SWITCHES =====================
 
 - hosts: Cisco_Switches
   gather_facts: no
   tasks:
-    - name: Backup Catalyst Switch config
+    - name: Backup Catalyst Switch config to dated archive
       cisco.ios.ios_config:
         backup: yes
         backup_options:
           filename: "{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-config.txt"
-          dir_path: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}"
+          dir_path: "{{ lookup('env', 'HOME') }}/network-programmability/backups/archive/{{ hostvars.localhost.DTG }}"
+
+    - name: Backup Catalyst Switch config to current/ for diffing
+      cisco.ios.ios_command:
+        commands: show running-config
+      register: switch_config
+
+    - name: Save current config to current/ directory
+      copy:
+        content: "{{ switch_config.stdout[0] }}"
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/current/{{ inventory_hostname }}-config.txt"
 
 - hosts: Cisco_Switches
   gather_facts: no
@@ -133,10 +159,15 @@
         commands: "{{ command_list }}"
       register: showoutput
 
-    - name: Save output to file
+    - name: Save show output to dated archive
       template:
         src: template.j2
-        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-showoutput.txt"
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/archive/{{ hostvars.localhost.DTG }}/{{ inventory_hostname }}-{{ hostvars.localhost.DTG }}-showoutput.txt"
+
+    - name: Save show output to current/ for diffing
+      template:
+        src: template.j2
+        dest: "{{ lookup('env', 'HOME') }}/network-programmability/backups/current/{{ inventory_hostname }}-showoutput.txt"
 
 # ===================== JUNIPER CONFIGURATION OUTPUT =====================
 - hosts: Juniper
@@ -144,14 +175,18 @@
   connection: netconf
 
   vars:
-    backup_dir: "{{ lookup('env','HOME') ~ '/network-programmability/backups/' ~ (hostvars['localhost']['DTG'] | trim) }}"
+    archive_dir: "{{ lookup('env','HOME') }}/network-programmability/backups/archive/{{ hostvars['localhost']['DTG'] | trim }}"
+    current_dir: "{{ lookup('env','HOME') }}/network-programmability/backups/current"
 
   tasks:
-    - name: Ensure backup directory exists
+    - name: Ensure archive and current backup directories exist
       file:
-        path: "{{ backup_dir }}"
+        path: "{{ item }}"
         state: directory
         mode: '0755'
+      loop:
+        - "{{ archive_dir }}"
+        - "{{ current_dir }}"
 
     - name: Run SHOW Config command for Juniper
       junipernetworks.junos.junos_command:
@@ -159,17 +194,17 @@
           - show configuration
       register: juniper_config
 
-    - name: Debug juniper config
-      debug:
-        var: juniper_config
-
-    - name: Save Junos config and show outputs to disk
+    - name: Save config to dated archive directory
       copy:
         content: "{{ juniper_config.stdout | join('\n') | default('No output from device') }}"
-        dest: "{{ backup_dir ~ '/' ~ inventory_hostname ~ '-' ~ (hostvars['localhost']['DTG'] | trim) ~ '-config.txt' }}"
+        dest: "{{ archive_dir }}/{{ inventory_hostname }}-{{ hostvars['localhost']['DTG'] | trim }}-config.txt"
+
+    - name: Save config to current directory for diffing
+      copy:
+        content: "{{ juniper_config.stdout | join('\n') | default('No output from device') }}"
+        dest: "{{ current_dir }}/{{ inventory_hostname }}-config.txt"
 
 # ===================== JUNIPER SHOW OUTPUT =====================
-
 - name: JUNIPER SHOW OUTPUT
   hosts: Juniper
   gather_facts: no
@@ -180,7 +215,8 @@
 
   vars:
     DTG: "{{ lookup('pipe','date +%Y-%m-%d') }}"
-    backup_dir: "{{ lookup('env','HOME') }}/network-programmability/backups/{{ DTG }}"
+    archive_dir: "{{ lookup('env','HOME') }}/network-programmability/backups/archive/{{ DTG }}"
+    current_dir: "{{ lookup('env','HOME') }}/network-programmability/backups/current"
     junos_rpcs:
       - { rpc: get-software-information }
       - { rpc: get-system-uptime-information }
@@ -191,11 +227,14 @@
       - { rpc: get-alarm-information }
 
   tasks:
-    - name: Ensure backup directory exists
+    - name: Ensure archive and current directories exist
       file:
-        path: "{{ backup_dir }}"
+        path: "{{ item }}"
         state: directory
       delegate_to: localhost
+      loop:
+        - "{{ archive_dir }}"
+        - "{{ current_dir }}"
 
     - name: Run Junos RPC commands
       junipernetworks.junos.junos_rpc:
@@ -204,13 +243,22 @@
       loop: "{{ junos_rpcs }}"
       register: rpc_output
 
-    - name: Save output using template
+    - name: Save RPC output to archive
       template:
         src: junos_output.j2
-        dest: "{{ backup_dir ~ '/' ~ inventory_hostname ~ '-' ~ (hostvars['localhost']['DTG'] | trim) ~ '-showoutput.txt' }}"
+        dest: "{{ archive_dir }}/{{ inventory_hostname }}-{{ DTG }}-showoutput.txt"
       vars:
         showoutput: "{{ rpc_output }}"
       delegate_to: localhost
+
+    - name: Save RPC output to current
+      template:
+        src: junos_output.j2
+        dest: "{{ current_dir }}/{{ inventory_hostname }}-showoutput.txt"
+      vars:
+        showoutput: "{{ rpc_output }}"
+      delegate_to: localhost
+
 
 # ===================== GITHUB BACKUP =====================
 
